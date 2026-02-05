@@ -32,12 +32,12 @@ const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 // BELYSNING OG SKYGGE INDSTILLINGER
-const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Højt generelt lys
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.90); // Højt generelt lys
 scene.add(ambientLight);
 
 // Moderat directional light for subtile skygger
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5); // Moderat styrke
-directionalLight.position.set(5, 5, 5); // Lyskildens position (x, y, z)
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); // Moderat styrke
+directionalLight.position.set(0, -10, 10); // Lyskildens position (x, y, z)
 directionalLight.castShadow = true; // Aktivér skygger
 scene.add(directionalLight);
 
@@ -72,7 +72,7 @@ let uploadedImageTexture = null;
 // FARVE INDSTILLINGER - ÆNDRE HER! 
 
 const FRAME_COLOR = 0xf7b594; //ramme
-const HOLE_BOTTOM_COLOR = 0x966a53; // bundfarve i hullerne
+const HOLE_BOTTOM_COLOR = 0x96715f; // bundfarve i hullerne
 
 // Liste over special objekter der skal have samme farve som hul1
 const SPECIAL_OBJECT_NAMES = ['C', 'C2', 'E', 'F', 'M', 'O1', 'O2', 'O3', 'R', 'Z'];
@@ -365,12 +365,9 @@ function handle3DClick(event) {
     const ctx = canvas.getContext('2d');
     const pixel = ctx.getImageData(x, y, 1, 1).data;
     
-    // Konverter til Three.js color
-    const color = new THREE.Color(
-      pixel[0] / 255,
-      pixel[1] / 255,
-      pixel[2] / 255
-    );
+    // Konverter til Three.js color i korrekt farverum
+    const color = new THREE.Color();
+    color.setRGB(pixel[0] / 255, pixel[1] / 255, pixel[2] / 255, THREE.SRGBColorSpace);
     
     sampledColors[currentColorIndex] = color;
     
@@ -386,52 +383,110 @@ function handle3DClick(event) {
   }
 }
 
+// Hjælpefunktion til at finde naboer baseret på afstand
+function findNeighbors(holes, maxDistance = 0.8) {
+  const neighbors = new Map();
+  
+  holes.forEach((hole, index) => {
+    const holeNeighbors = [];
+    const pos1 = new THREE.Vector3();
+    hole.getWorldPosition(pos1);
+    
+    holes.forEach((otherHole, otherIndex) => {
+      if (index === otherIndex) return;
+      
+      const pos2 = new THREE.Vector3();
+      otherHole.getWorldPosition(pos2);
+      
+      const distance = pos1.distanceTo(pos2);
+      
+      if (distance < maxDistance) {
+        holeNeighbors.push(otherIndex);
+      }
+    });
+    
+    neighbors.set(index, holeNeighbors);
+  });
+  
+  return neighbors;
+}
+
+// Hjælpefunktion til at vælge en farve der ikke bruges af naboer
+function selectColorAvoidingNeighbors(usedColors, availableColors) {
+  // Prøv at finde en farve der ikke er i usedColors
+  for (let i = 0; i < availableColors.length; i++) {
+    const colorIndex = Math.floor(Math.random() * availableColors.length);
+    if (!usedColors.has(colorIndex)) {
+      return colorIndex;
+    }
+  }
+  
+  // Hvis alle farver er brugt af naboer, vælg en tilfældig
+  return Math.floor(Math.random() * availableColors.length);
+}
+
 function applyColorsToHoles() {
   if (holeObjects.length === 0) {
     updateStatus('Ingen huller fundet - vent på at modellen indlæses');
     return;
   }
   
-  console.log('=== ANVENDER FARVER ===');
+  console.log('=== ANVENDER FARVER MED NABO-TJEK ===');
   console.log(`Antal huller (hul1-hul62): ${holeObjects.length}`);
   console.log(`Antal special objekter: ${specialObjects.length}`);
   console.log(`Samplede farver:`, sampledColors);
   
-  let hul1Color = null;
+  // Find naboer for hvert hul
+  const neighbors = findNeighbors(holeObjects);
+  console.log('Naboer fundet:', neighbors);
   
-  // Anvend tilfældige farver KUN på hul1-hul62
+  // Array til at holde styr på hvilken farve hvert hul har fået
+  const holeColorIndices = new Array(holeObjects.length).fill(-1);
+  
+  let hul1Color = null;
+  let hul1Index = -1;
+  
+  // Find hul1 først
   holeObjects.forEach((hole, index) => {
-    const randomColor = sampledColors[Math.floor(Math.random() * 9)]; // Vælg fra 9 farver
-    
-    if (hole.material) {
-      hole.material.color.copy(randomColor);
-      hole.material.needsUpdate = true;
-      
-      // Gem farven fra hul1
-      if (hole.name.toLowerCase().includes('hul1') && !hole.name.toLowerCase().includes('hul1')) {
-        // Dette er hul1 (ikke hul10, hul11, etc.)
-        const match = hole.name.match(/hul(\d+)/i);
-        if (match && match[1] === '1') {
-          hul1Color = randomColor.clone();
-          console.log(`Hul1 farve gemt: rgb(${Math.round(randomColor.r*255)}, ${Math.round(randomColor.g*255)}, ${Math.round(randomColor.b*255)})`);
-        }
-      }
-      
-      console.log(`${hole.name}: rgb(${Math.round(randomColor.r*255)}, ${Math.round(randomColor.g*255)}, ${Math.round(randomColor.b*255)})`);
+    const match = hole.name.match(/hul(\d+)/i);
+    if (match && match[1] === '1') {
+      hul1Index = index;
     }
   });
   
-  // Find hul1 farve hvis den ikke blev fundet i første loop
-  if (!hul1Color) {
-    for (let hole of holeObjects) {
-      const match = hole.name.match(/hul(\d+)/i);
-      if (match && match[1] === '1') {
-        hul1Color = hole.material.color.clone();
-        console.log(`Hul1 farve fundet: rgb(${Math.round(hul1Color.r*255)}, ${Math.round(hul1Color.g*255)}, ${Math.round(hul1Color.b*255)})`);
-        break;
+  // Anvend farver med nabo-tjek
+  holeObjects.forEach((hole, index) => {
+    if (!hole.material) return;
+    
+    // Find hvilke farver naboerne bruger
+    const neighborColorIndices = new Set();
+    const holeNeighbors = neighbors.get(index) || [];
+    
+    holeNeighbors.forEach(neighborIndex => {
+      if (holeColorIndices[neighborIndex] !== -1) {
+        neighborColorIndices.add(holeColorIndices[neighborIndex]);
       }
+    });
+    
+    // Vælg en farve der ikke bruges af naboer
+    const colorIndex = selectColorAvoidingNeighbors(neighborColorIndices, sampledColors);
+    const selectedColor = sampledColors[colorIndex];
+    
+    // Gem farve index
+    holeColorIndices[index] = colorIndex;
+    
+    // Anvend farven
+    hole.material.color.copy(selectedColor);
+    hole.material.needsUpdate = true;
+    
+    // Gem hul1's farve
+    if (index === hul1Index) {
+      hul1Color = selectedColor.clone();
+      console.log(`Hul1 farve gemt: rgb(${Math.round(hul1Color.r*255)}, ${Math.round(hul1Color.g*255)}, ${Math.round(hul1Color.b*255)})`);
     }
-  }
+    
+    console.log(`${hole.name}: farve ${colorIndex + 1}, naboer bruger: [${Array.from(neighborColorIndices).map(i => i + 1).join(', ')}]`);
+  });
   
   // Anvend hul1's farve på special objekterne (C, C2, E, F, M, O1, O2, O3, R, Z)
   if (hul1Color && specialObjects.length > 0) {
@@ -444,7 +499,7 @@ function applyColorsToHoles() {
     });
   }
   
-  updateStatus(`Farver anvendt på ${holeObjects.length} huller! Special objekter har samme farve som hul1.`);
+  updateStatus(`Farver anvendt på ${holeObjects.length} huller! Ingen naboer har samme farve.`);
 }
 
 function updateStatus(message) {
